@@ -1,28 +1,46 @@
 <script lang="ts">
-	import sha256 from 'js-sha256';
 	import Modal from '../common/Modal.svelte';
 
-	import { WEB_UI_VERSION, API_BASE_URL as BUILD_TIME_API_BASE_URL } from '$lib/constants';
+	import { WEB_UI_VERSION, OLLAMA_API_BASE_URL } from '$lib/constants';
 	import toast from 'svelte-french-toast';
+	import { onMount } from 'svelte';
+	import { config, models, settings, user } from '$lib/stores';
+	import { splitStream, getGravatarURL } from '$lib/utils';
+	import Advanced from './Settings/Advanced.svelte';
 
 	export let show = false;
-	export let saveSettings: Function;
-	export let getModelTags: Function;
+
+	const saveSettings = async (updated) => {
+		console.log(updated);
+		await settings.set({ ...$settings, ...updated });
+		await models.set(await getModels());
+		localStorage.setItem('settings', JSON.stringify($settings));
+	};
 
 	let selectedTab = 'general';
 
 	// General
-	let API_BASE_URL = BUILD_TIME_API_BASE_URL;
+	let API_BASE_URL = OLLAMA_API_BASE_URL;
 	let theme = 'dark';
 	let system = '';
 
 	// Advanced
 	let requestFormat = '';
-	let seed = 0;
-	let temperature = 0.8;
-	let repeat_penalty = 1.1;
-	let top_k = 40;
-	let top_p = 0.9;
+	let options = {
+		// Advanced
+		seed: 0,
+		temperature: '',
+		repeat_penalty: '',
+		repeat_last_n: '',
+		mirostat: '',
+		mirostat_eta: '',
+		mirostat_tau: '',
+		top_k: '',
+		top_p: '',
+		stop: '',
+		tfs_z: '',
+		num_ctx: ''
+	};
 
 	// Models
 	let modelTag = '';
@@ -31,46 +49,26 @@
 	let pullProgress = null;
 
 	// Addons
+	let titleAutoGenerate = true;
 	let speechAutoSend = false;
 	let gravatarEmail = '';
 	let OPENAI_API_KEY = '';
 
-	function getGravatarURL(email) {
-		// Trim leading and trailing whitespace from
-		// an email address and force all characters
-		// to lower case
-		const address = String(email).trim().toLowerCase();
-
-		// Create a SHA256 hash of the final string
-		const hash = sha256(address);
-
-		// Grab the actual image URL
-		return `https://www.gravatar.com/avatar/${hash}`;
-	}
-
-	const splitStream = (splitOn) => {
-		let buffer = '';
-		return new TransformStream({
-			transform(chunk, controller) {
-				buffer += chunk;
-				const parts = buffer.split(splitOn);
-				parts.slice(0, -1).forEach((part) => controller.enqueue(part));
-				buffer = parts[parts.length - 1];
-			},
-			flush(controller) {
-				if (buffer) controller.enqueue(buffer);
-			}
-		});
-	};
+	// Auth
+	let authEnabled = false;
+	let authType = 'Basic';
+	let authContent = '';
 
 	const checkOllamaConnection = async () => {
 		if (API_BASE_URL === '') {
-			API_BASE_URL = BUILD_TIME_API_BASE_URL;
+			API_BASE_URL = OLLAMA_API_BASE_URL;
 		}
-		const res = await getModelTags(API_BASE_URL, 'ollama');
+		const _models = await getModels(API_BASE_URL, 'ollama');
 
-		if (res) {
+		if (_models.length > 0) {
 			toast.success('Server connection verified');
+			await models.set(_models);
+
 			saveSettings({
 				API_BASE_URL: API_BASE_URL
 			});
@@ -105,11 +103,22 @@
 		saveSettings({ speechAutoSend: speechAutoSend });
 	};
 
+	const toggleTitleAutoGenerate = async () => {
+		titleAutoGenerate = !titleAutoGenerate;
+		saveSettings({ titleAutoGenerate: titleAutoGenerate });
+	};
+
+	const toggleAuthHeader = async () => {
+		authEnabled = !authEnabled;
+	};
+
 	const pullModelHandler = async () => {
 		const res = await fetch(`${API_BASE_URL}/pull`, {
 			method: 'POST',
 			headers: {
-				'Content-Type': 'text/event-stream'
+				'Content-Type': 'text/event-stream',
+				...($settings.authHeader && { Authorization: $settings.authHeader }),
+				...($user && { Authorization: `Bearer ${localStorage.token}` })
 			},
 			body: JSON.stringify({
 				name: modelTag
@@ -137,8 +146,12 @@
 						if (data.error) {
 							throw data.error;
 						}
+
+						if (data.detail) {
+							throw data.detail;
+						}
 						if (data.status) {
-							if (!data.status.includes('downloading')) {
+							if (!data.digest) {
 								toast.success(data.status);
 							} else {
 								digest = data.digest;
@@ -158,14 +171,16 @@
 		}
 
 		modelTag = '';
-		await getModelTags();
+		models.set(await getModels());
 	};
 
 	const deleteModelHandler = async () => {
 		const res = await fetch(`${API_BASE_URL}/delete`, {
 			method: 'DELETE',
 			headers: {
-				'Content-Type': 'text/event-stream'
+				'Content-Type': 'text/event-stream',
+				...($settings.authHeader && { Authorization: $settings.authHeader }),
+				...($user && { Authorization: `Bearer ${localStorage.token}` })
 			},
 			body: JSON.stringify({
 				name: deleteModelTag
@@ -193,6 +208,10 @@
 						if (data.error) {
 							throw data.error;
 						}
+						if (data.detail) {
+							throw data.detail;
+						}
+
 						if (data.status) {
 						}
 					} else {
@@ -206,28 +225,102 @@
 		}
 
 		deleteModelTag = '';
-		await getModelTags();
+		models.set(await getModels());
 	};
 
-	$: if (show) {
+	const getModels = async (url = '', type = 'all') => {
+		let models = [];
+		const res = await fetch(`${url ? url : $settings?.API_BASE_URL ?? OLLAMA_API_BASE_URL}/tags`, {
+			method: 'GET',
+			headers: {
+				Accept: 'application/json',
+				'Content-Type': 'application/json',
+				...($settings.authHeader && { Authorization: $settings.authHeader }),
+				...($user && { Authorization: `Bearer ${localStorage.token}` })
+			}
+		})
+			.then(async (res) => {
+				if (!res.ok) throw await res.json();
+				return res.json();
+			})
+			.catch((error) => {
+				console.log(error);
+				if ('detail' in error) {
+					toast.error(error.detail);
+				} else {
+					toast.error('Server connection failed');
+				}
+				return null;
+			});
+		console.log(res);
+		models.push(...(res?.models ?? []));
+
+		// If OpenAI API Key exists
+		if (type === 'all' && $settings.OPENAI_API_KEY) {
+			// Validate OPENAI_API_KEY
+			const openaiModelRes = await fetch(`https://api.openai.com/v1/models`, {
+				method: 'GET',
+				headers: {
+					'Content-Type': 'application/json',
+					Authorization: `Bearer ${$settings.OPENAI_API_KEY}`
+				}
+			})
+				.then(async (res) => {
+					if (!res.ok) throw await res.json();
+					return res.json();
+				})
+				.catch((error) => {
+					console.log(error);
+					toast.error(`OpenAI: ${error?.error?.message ?? 'Network Problem'}`);
+					return null;
+				});
+
+			const openAIModels = openaiModelRes?.data ?? null;
+
+			models.push(
+				...(openAIModels
+					? [
+							{ name: 'hr' },
+							...openAIModels
+								.map((model) => ({ name: model.id, label: 'OpenAI' }))
+								.filter((model) => model.name.includes('gpt'))
+					  ]
+					: [])
+			);
+		}
+
+		return models;
+	};
+
+	onMount(() => {
 		let settings = JSON.parse(localStorage.getItem('settings') ?? '{}');
 		console.log(settings);
 
 		theme = localStorage.theme ?? 'dark';
-		API_BASE_URL = settings.API_BASE_URL ?? BUILD_TIME_API_BASE_URL;
+		API_BASE_URL = settings.API_BASE_URL ?? OLLAMA_API_BASE_URL;
 		system = settings.system ?? '';
 
 		requestFormat = settings.requestFormat ?? '';
-		seed = settings.seed ?? 0;
-		temperature = settings.temperature ?? 0.8;
-		repeat_penalty = settings.repeat_penalty ?? 1.1;
-		top_k = settings.top_k ?? 40;
-		top_p = settings.top_p ?? 0.9;
 
+		options.seed = settings.seed ?? 0;
+		options.temperature = settings.temperature ?? '';
+		options.repeat_penalty = settings.repeat_penalty ?? '';
+		options.top_k = settings.top_k ?? '';
+		options.top_p = settings.top_p ?? '';
+		options.num_ctx = settings.num_ctx ?? '';
+		options = { ...options, ...settings.options };
+
+		titleAutoGenerate = settings.titleAutoGenerate ?? true;
 		speechAutoSend = settings.speechAutoSend ?? false;
 		gravatarEmail = settings.gravatarEmail ?? '';
 		OPENAI_API_KEY = settings.OPENAI_API_KEY ?? '';
-	}
+
+		authEnabled = settings.authHeader !== undefined ? true : false;
+		if (authEnabled) {
+			authType = settings.authHeader.split(' ')[0];
+			authContent = settings.authHeader.split(' ')[1];
+		}
+	});
 </script>
 
 <Modal bind:show>
@@ -358,6 +451,34 @@
 					<div class=" self-center">Add-ons</div>
 				</button>
 
+				{#if !$config || ($config && !$config.auth)}
+					<button
+						class="px-2.5 py-2.5 min-w-fit rounded-lg flex-1 md:flex-none flex text-right transition {selectedTab ===
+						'auth'
+							? 'bg-gray-200 dark:bg-gray-700'
+							: ' hover:bg-gray-300 dark:hover:bg-gray-800'}"
+						on:click={() => {
+							selectedTab = 'auth';
+						}}
+					>
+						<div class=" self-center mr-2">
+							<svg
+								xmlns="http://www.w3.org/2000/svg"
+								viewBox="0 0 24 24"
+								fill="currentColor"
+								class="w-4 h-4"
+							>
+								<path
+									fill-rule="evenodd"
+									d="M12.516 2.17a.75.75 0 00-1.032 0 11.209 11.209 0 01-7.877 3.08.75.75 0 00-.722.515A12.74 12.74 0 002.25 9.75c0 5.942 4.064 10.933 9.563 12.348a.749.749 0 00.374 0c5.499-1.415 9.563-6.406 9.563-12.348 0-1.39-.223-2.73-.635-3.985a.75.75 0 00-.722-.516l-.143.001c-2.996 0-5.717-1.17-7.734-3.08zm3.094 8.016a.75.75 0 10-1.22-.872l-3.236 4.53L9.53 12.22a.75.75 0 00-1.06 1.06l2.25 2.25a.75.75 0 001.14-.094l3.75-5.25z"
+									clip-rule="evenodd"
+								/>
+							</svg>
+						</div>
+						<div class=" self-center">Authentication</div>
+					</button>
+				{/if}
+
 				<button
 					class="px-2.5 py-2.5 min-w-fit rounded-lg flex-1 md:flex-none flex text-right transition {selectedTab ===
 					'about'
@@ -384,7 +505,7 @@
 					<div class=" self-center">About</div>
 				</button>
 			</div>
-			<div class="flex-1 md:min-h-[300px]">
+			<div class="flex-1 md:min-h-[340px]">
 				{#if selectedTab === 'general'}
 					<div class="flex flex-col space-y-3">
 						<div>
@@ -488,7 +609,7 @@
 								class=" px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-gray-100 transition rounded"
 								on:click={() => {
 									saveSettings({
-										API_BASE_URL: API_BASE_URL === '' ? BUILD_TIME_API_BASE_URL : API_BASE_URL,
+										API_BASE_URL: API_BASE_URL === '' ? OLLAMA_API_BASE_URL : API_BASE_URL,
 										system: system !== '' ? system : undefined
 									});
 									show = false;
@@ -499,8 +620,13 @@
 						</div>
 					</div>
 				{:else if selectedTab === 'advanced'}
-					<div class="flex flex-col h-full justify-between space-y-3 text-sm">
-						<div class=" space-y-3">
+					<div class="flex flex-col h-full justify-between text-sm">
+						<div class=" space-y-3 pr-1.5 overflow-y-scroll max-h-72">
+							<div class=" text-sm font-medium">Parameters</div>
+
+							<Advanced bind:options />
+							<hr class=" dark:border-gray-700" />
+
 							<div>
 								<div class=" py-1 flex w-full justify-between">
 									<div class=" self-center text-sm font-medium">Request Mode</div>
@@ -529,98 +655,6 @@
 									</button>
 								</div>
 							</div>
-
-							<hr class=" dark:border-gray-700" />
-
-							<div>
-								<div class=" py-1 flex w-full justify-between">
-									<div class=" w-20 text-sm font-medium self-center">Seed</div>
-									<div class=" flex-1 self-center">
-										<input
-											class="w-full rounded py-2 px-4 text-sm dark:text-gray-300 dark:bg-gray-800 outline-none"
-											type="number"
-											placeholder="Enter Seed"
-											bind:value={seed}
-											autocomplete="off"
-											min="0"
-										/>
-									</div>
-								</div>
-							</div>
-
-							<hr class=" dark:border-gray-700" />
-
-							<div>
-								<label for="steps-range" class=" mb-2 text-sm font-medium flex justify-between">
-									<div>Temperature</div>
-									<div>
-										{temperature}
-									</div></label
-								>
-								<input
-									id="steps-range"
-									type="range"
-									min="0"
-									max="1"
-									bind:value={temperature}
-									step="0.05"
-									class="w-full h-2 rounded-lg appearance-none cursor-pointer dark:bg-gray-700"
-								/>
-							</div>
-
-							<div>
-								<label for="steps-range" class=" mb-2 text-sm font-medium flex justify-between">
-									<div>Repeat Penalty</div>
-									<div>
-										{repeat_penalty}
-									</div></label
-								>
-								<input
-									id="steps-range"
-									type="range"
-									min="0"
-									max="2"
-									bind:value={repeat_penalty}
-									step="0.05"
-									class="w-full h-2 rounded-lg appearance-none cursor-pointer dark:bg-gray-700"
-								/>
-							</div>
-
-							<div>
-								<label for="steps-range" class=" mb-2 text-sm font-medium flex justify-between">
-									<div>Top K</div>
-									<div>
-										{top_k}
-									</div></label
-								>
-								<input
-									id="steps-range"
-									type="range"
-									min="0"
-									max="100"
-									bind:value={top_k}
-									step="0.5"
-									class="w-full h-2 rounded-lg appearance-none cursor-pointer dark:bg-gray-700"
-								/>
-							</div>
-
-							<div>
-								<label for="steps-range" class=" mb-2 text-sm font-medium flex justify-between">
-									<div>Top P</div>
-									<div>
-										{top_p}
-									</div></label
-								>
-								<input
-									id="steps-range"
-									type="range"
-									min="0"
-									max="1"
-									bind:value={top_p}
-									step="0.05"
-									class="w-full h-2 rounded-lg appearance-none cursor-pointer dark:bg-gray-700"
-								/>
-							</div>
 						</div>
 
 						<div class="flex justify-end pt-3 text-sm font-medium">
@@ -628,11 +662,22 @@
 								class=" px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-gray-100 transition rounded"
 								on:click={() => {
 									saveSettings({
-										seed: (seed !== 0 ? seed : undefined) ?? undefined,
-										temperature: temperature !== 0.8 ? temperature : undefined,
-										repeat_penalty: repeat_penalty !== 1.1 ? repeat_penalty : undefined,
-										top_k: top_k !== 40 ? top_k : undefined,
-										top_p: top_p !== 0.9 ? top_p : undefined
+										options: {
+											seed: (options.seed !== 0 ? options.seed : undefined) ?? undefined,
+											stop: options.stop !== '' ? options.stop : undefined,
+											temperature: options.temperature !== '' ? options.temperature : undefined,
+											repeat_penalty:
+												options.repeat_penalty !== '' ? options.repeat_penalty : undefined,
+											repeat_last_n:
+												options.repeat_last_n !== '' ? options.repeat_last_n : undefined,
+											mirostat: options.mirostat !== '' ? options.mirostat : undefined,
+											mirostat_eta: options.mirostat_eta !== '' ? options.mirostat_eta : undefined,
+											mirostat_tau: options.mirostat_tau !== '' ? options.mirostat_tau : undefined,
+											top_k: options.top_k !== '' ? options.top_k : undefined,
+											top_p: options.top_p !== '' ? options.top_p : undefined,
+											tfs_z: options.tfs_z !== '' ? options.tfs_z : undefined,
+											num_ctx: options.num_ctx !== '' ? options.num_ctx : undefined
+										}
 									});
 									show = false;
 								}}
@@ -694,7 +739,7 @@
 											{pullProgress ?? 0}%
 										</div>
 									</div>
-									<div class="mt-1 text-xs dark:text-gray-700" style="font-size: 0.5rem;">
+									<div class="mt-1 text-xs dark:text-gray-500" style="font-size: 0.5rem;">
 										{digest}
 									</div>
 								</div>
@@ -747,6 +792,28 @@
 						}}
 					>
 						<div class=" space-y-3">
+							<div>
+								<div class=" py-1 flex w-full justify-between">
+									<div class=" self-center text-sm font-medium">Title Auto Generation</div>
+
+									<button
+										class="p-1 px-3 text-xs flex rounded transition"
+										on:click={() => {
+											toggleTitleAutoGenerate();
+										}}
+										type="button"
+									>
+										{#if titleAutoGenerate === true}
+											<span class="ml-2 self-center">On</span>
+										{:else}
+											<span class="ml-2 self-center">Off</span>
+										{/if}
+									</button>
+								</div>
+							</div>
+
+							<hr class=" dark:border-gray-700" />
+
 							<div>
 								<div class=" py-1 flex w-full justify-between">
 									<div class=" self-center text-sm font-medium">Voice Input Auto-Send</div>
@@ -822,6 +889,123 @@
 							</button>
 						</div>
 					</form>
+				{:else if selectedTab === 'auth'}
+					<form
+						class="flex flex-col h-full justify-between space-y-3 text-sm"
+						on:submit|preventDefault={() => {
+							console.log('auth save');
+							saveSettings({
+								authHeader: authEnabled ? `${authType} ${authContent}` : undefined
+							});
+							show = false;
+						}}
+					>
+						<div class=" space-y-3">
+							<div>
+								<div class=" py-1 flex w-full justify-between">
+									<div class=" self-center text-sm font-medium">Authorization Header</div>
+
+									<button
+										class="p-1 px-3 text-xs flex rounded transition"
+										type="button"
+										on:click={() => {
+											toggleAuthHeader();
+										}}
+									>
+										{#if authEnabled === true}
+											<svg
+												xmlns="http://www.w3.org/2000/svg"
+												viewBox="0 0 24 24"
+												fill="currentColor"
+												class="w-4 h-4"
+											>
+												<path
+													fill-rule="evenodd"
+													d="M12 1.5a5.25 5.25 0 00-5.25 5.25v3a3 3 0 00-3 3v6.75a3 3 0 003 3h10.5a3 3 0 003-3v-6.75a3 3 0 00-3-3v-3c0-2.9-2.35-5.25-5.25-5.25zm3.75 8.25v-3a3.75 3.75 0 10-7.5 0v3h7.5z"
+													clip-rule="evenodd"
+												/>
+											</svg>
+
+											<span class="ml-2 self-center"> On </span>
+										{:else}
+											<svg
+												xmlns="http://www.w3.org/2000/svg"
+												viewBox="0 0 24 24"
+												fill="currentColor"
+												class="w-4 h-4"
+											>
+												<path
+													d="M18 1.5c2.9 0 5.25 2.35 5.25 5.25v3.75a.75.75 0 01-1.5 0V6.75a3.75 3.75 0 10-7.5 0v3a3 3 0 013 3v6.75a3 3 0 01-3 3H3.75a3 3 0 01-3-3v-6.75a3 3 0 013-3h9v-3c0-2.9 2.35-5.25 5.25-5.25z"
+												/>
+											</svg>
+
+											<span class="ml-2 self-center">Off</span>
+										{/if}
+									</button>
+								</div>
+							</div>
+
+							{#if authEnabled}
+								<hr class=" dark:border-gray-700" />
+
+								<div class="mt-2">
+									<div class=" py-1 flex w-full space-x-2">
+										<button
+											class=" py-1 font-semibold flex rounded transition"
+											on:click={() => {
+												authType = authType === 'Basic' ? 'Bearer' : 'Basic';
+											}}
+											type="button"
+										>
+											{#if authType === 'Basic'}
+												<span class="self-center mr-2">Basic</span>
+											{:else if authType === 'Bearer'}
+												<span class="self-center mr-2">Bearer</span>
+											{/if}
+										</button>
+
+										<div class="flex-1">
+											<input
+												class="w-full rounded py-2 px-4 text-sm dark:text-gray-300 dark:bg-gray-800 outline-none"
+												placeholder="Enter Authorization Header Content"
+												bind:value={authContent}
+											/>
+										</div>
+									</div>
+									<div class="mt-2 text-xs text-gray-400 dark:text-gray-500">
+										Toggle between <span class=" text-gray-500 dark:text-gray-300 font-medium"
+											>'Basic'</span
+										>
+										and <span class=" text-gray-500 dark:text-gray-300 font-medium">'Bearer'</span> by
+										clicking on the label next to the input.
+									</div>
+								</div>
+
+								<hr class=" dark:border-gray-700" />
+
+								<div>
+									<div class=" mb-2.5 text-sm font-medium">Preview Authorization Header</div>
+									<textarea
+										value={JSON.stringify({
+											Authorization: `${authType} ${authContent}`
+										})}
+										class="w-full rounded p-4 text-sm dark:text-gray-300 dark:bg-gray-800 outline-none resize-none"
+										rows="2"
+										disabled
+									/>
+								</div>
+							{/if}
+						</div>
+
+						<div class="flex justify-end pt-3 text-sm font-medium">
+							<button
+								class=" px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-gray-100 transition rounded"
+								type="submit"
+							>
+								Save
+							</button>
+						</div>
+					</form>
 				{:else if selectedTab === 'about'}
 					<div class="flex flex-col h-full justify-between space-y-3 text-sm mb-6">
 						<div class=" space-y-3">
@@ -829,7 +1013,7 @@
 								<div class=" mb-2.5 text-sm font-medium">Ollama Web UI Version</div>
 								<div class="flex w-full">
 									<div class="flex-1 text-xs text-gray-700 dark:text-gray-200">
-										{WEB_UI_VERSION}
+										{$config && $config.version ? $config.version : WEB_UI_VERSION}
 									</div>
 								</div>
 							</div>
