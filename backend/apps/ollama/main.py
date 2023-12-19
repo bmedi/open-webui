@@ -59,27 +59,49 @@ def proxy(path):
     else:
         pass
 
-    # Make a request to the target server
-    target_response = requests.request(
-        method=request.method,
-        url=target_url,
-        data=data,
-        headers=headers,
-        stream=True,  # Enable streaming for server-sent events
-    )
+    r = None
 
-    # Proxy the target server's response to the client
-    def generate():
-        for chunk in target_response.iter_content(chunk_size=8192):
-            yield chunk
+    try:
+        # Make a request to the target server
+        r = requests.request(
+            method=request.method,
+            url=target_url,
+            data=data,
+            headers=headers,
+            stream=True,  # Enable streaming for server-sent events
+        )
 
-    response = Response(generate(), status=target_response.status_code)
+        r.raise_for_status()
 
-    # Copy headers from the target server's response to the client's response
-    for key, value in target_response.headers.items():
-        response.headers[key] = value
+        # Proxy the target server's response to the client
+        def generate():
+            for chunk in r.iter_content(chunk_size=8192):
+                yield chunk
 
-    return response
+        response = Response(generate(), status=r.status_code)
+
+        # Copy headers from the target server's response to the client's response
+        for key, value in r.headers.items():
+            response.headers[key] = value
+
+        return response
+    except Exception as e:
+        error_detail = "Ollama WebUI: Server Connection Error"
+        if r != None:
+            res = r.json()
+            if "error" in res:
+                error_detail = f"Ollama: {res['error']}"
+            print(res)
+
+        return (
+            jsonify(
+                {
+                    "detail": error_detail,
+                    "message": str(e),
+                }
+            ),
+            400,
+        )
 
 
 if __name__ == "__main__":

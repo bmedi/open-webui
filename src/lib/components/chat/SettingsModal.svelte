@@ -4,7 +4,7 @@
 	import { WEB_UI_VERSION, OLLAMA_API_BASE_URL } from '$lib/constants';
 	import toast from 'svelte-french-toast';
 	import { onMount } from 'svelte';
-	import { config, models, settings, user } from '$lib/stores';
+	import { config, info, models, settings, user } from '$lib/stores';
 	import { splitStream, getGravatarURL } from '$lib/utils';
 	import Advanced from './Settings/Advanced.svelte';
 
@@ -22,6 +22,7 @@
 	// General
 	let API_BASE_URL = OLLAMA_API_BASE_URL;
 	let theme = 'dark';
+	let notificationEnabled = false;
 	let system = '';
 
 	// Advanced
@@ -51,6 +52,8 @@
 	// Addons
 	let titleAutoGenerate = true;
 	let speechAutoSend = false;
+	let responseAutoCopy = false;
+
 	let gravatarEmail = '';
 	let OPENAI_API_KEY = '';
 
@@ -108,6 +111,41 @@
 		saveSettings({ titleAutoGenerate: titleAutoGenerate });
 	};
 
+	const toggleNotification = async () => {
+		const permission = await Notification.requestPermission();
+
+		if (permission === 'granted') {
+			notificationEnabled = !notificationEnabled;
+			saveSettings({ notificationEnabled: notificationEnabled });
+		} else {
+			toast.error(
+				'Response notifications cannot be activated as the website permissions have been denied. Please visit your browser settings to grant the necessary access.'
+			);
+		}
+	};
+
+	const toggleResponseAutoCopy = async () => {
+		const permission = await navigator.clipboard
+			.readText()
+			.then(() => {
+				return 'granted';
+			})
+			.catch(() => {
+				return '';
+			});
+
+		console.log(permission);
+
+		if (permission === 'granted') {
+			responseAutoCopy = !responseAutoCopy;
+			saveSettings({ responseAutoCopy: responseAutoCopy });
+		} else {
+			toast.error(
+				'Clipboard write permission denied. Please check your browser settings to grant the necessary access.'
+			);
+		}
+	};
+
 	const toggleAuthHeader = async () => {
 		authEnabled = !authEnabled;
 	};
@@ -153,6 +191,13 @@
 						if (data.status) {
 							if (!data.digest) {
 								toast.success(data.status);
+
+								if (data.status === 'success') {
+									const notification = new Notification(`Ollama`, {
+										body: `Model '${modelTag}' has been successfully downloaded.`,
+										icon: '/favicon.png'
+									});
+								}
 							} else {
 								digest = data.digest;
 								if (data.completed) {
@@ -297,6 +342,8 @@
 		console.log(settings);
 
 		theme = localStorage.theme ?? 'dark';
+		notificationEnabled = settings.notificationEnabled ?? false;
+
 		API_BASE_URL = settings.API_BASE_URL ?? OLLAMA_API_BASE_URL;
 		system = settings.system ?? '';
 
@@ -312,6 +359,8 @@
 
 		titleAutoGenerate = settings.titleAutoGenerate ?? true;
 		speechAutoSend = settings.speechAutoSend ?? false;
+		responseAutoCopy = settings.responseAutoCopy ?? false;
+
 		gravatarEmail = settings.gravatarEmail ?? '';
 		OPENAI_API_KEY = settings.OPENAI_API_KEY ?? '';
 
@@ -509,8 +558,10 @@
 				{#if selectedTab === 'general'}
 					<div class="flex flex-col space-y-3">
 						<div>
-							<div class=" py-1 flex w-full justify-between">
-								<div class=" self-center text-sm font-medium">Theme</div>
+							<div class=" mb-1 text-sm font-medium">WebUI Settings</div>
+
+							<div class=" py-0.5 flex w-full justify-between">
+								<div class=" self-center text-xs font-medium">Theme</div>
 
 								<button
 									class="p-1 px-3 text-xs flex rounded transition"
@@ -547,6 +598,26 @@
 										<span class="ml-2 self-center"> Light </span>
 									{/if}
 								</button>
+							</div>
+
+							<div>
+								<div class=" py-0.5 flex w-full justify-between">
+									<div class=" self-center text-xs font-medium">Notification</div>
+
+									<button
+										class="p-1 px-3 text-xs flex rounded transition"
+										on:click={() => {
+											toggleNotification();
+										}}
+										type="button"
+									>
+										{#if notificationEnabled === true}
+											<span class="ml-2 self-center">On</span>
+										{:else}
+											<span class="ml-2 self-center">Off</span>
+										{/if}
+									</button>
+								</div>
 							</div>
 						</div>
 
@@ -751,11 +822,20 @@
 							<div class=" mb-2.5 text-sm font-medium">Delete a model</div>
 							<div class="flex w-full">
 								<div class="flex-1 mr-2">
-									<input
+									<select
 										class="w-full rounded py-2 px-4 text-sm dark:text-gray-300 dark:bg-gray-800 outline-none"
-										placeholder="Enter model tag (e.g. mistral:7b)"
 										bind:value={deleteModelTag}
-									/>
+										placeholder="Select a model"
+									>
+										{#if !deleteModelTag}
+											<option value="" disabled selected>Select a model</option>
+										{/if}
+										{#each $models.filter((m) => m.size != null) as model}
+											<option value={model.name} class="bg-gray-100 dark:bg-gray-700"
+												>{model.name + ' (' + (model.size / 1024 ** 3).toFixed(1) + ' GB)'}</option
+											>
+										{/each}
+									</select>
 								</div>
 								<button
 									class="px-3 bg-red-700 hover:bg-red-800 text-gray-100 rounded transition"
@@ -793,44 +873,68 @@
 					>
 						<div class=" space-y-3">
 							<div>
-								<div class=" py-1 flex w-full justify-between">
-									<div class=" self-center text-sm font-medium">Title Auto Generation</div>
+								<div class=" mb-1 text-sm font-medium">WebUI Add-ons</div>
 
-									<button
-										class="p-1 px-3 text-xs flex rounded transition"
-										on:click={() => {
-											toggleTitleAutoGenerate();
-										}}
-										type="button"
-									>
-										{#if titleAutoGenerate === true}
-											<span class="ml-2 self-center">On</span>
-										{:else}
-											<span class="ml-2 self-center">Off</span>
-										{/if}
-									</button>
+								<div>
+									<div class=" py-0.5 flex w-full justify-between">
+										<div class=" self-center text-xs font-medium">Title Auto Generation</div>
+
+										<button
+											class="p-1 px-3 text-xs flex rounded transition"
+											on:click={() => {
+												toggleTitleAutoGenerate();
+											}}
+											type="button"
+										>
+											{#if titleAutoGenerate === true}
+												<span class="ml-2 self-center">On</span>
+											{:else}
+												<span class="ml-2 self-center">Off</span>
+											{/if}
+										</button>
+									</div>
 								</div>
-							</div>
 
-							<hr class=" dark:border-gray-700" />
+								<div>
+									<div class=" py-0.5 flex w-full justify-between">
+										<div class=" self-center text-xs font-medium">Voice Input Auto-Send</div>
 
-							<div>
-								<div class=" py-1 flex w-full justify-between">
-									<div class=" self-center text-sm font-medium">Voice Input Auto-Send</div>
+										<button
+											class="p-1 px-3 text-xs flex rounded transition"
+											on:click={() => {
+												toggleSpeechAutoSend();
+											}}
+											type="button"
+										>
+											{#if speechAutoSend === true}
+												<span class="ml-2 self-center">On</span>
+											{:else}
+												<span class="ml-2 self-center">Off</span>
+											{/if}
+										</button>
+									</div>
+								</div>
 
-									<button
-										class="p-1 px-3 text-xs flex rounded transition"
-										on:click={() => {
-											toggleSpeechAutoSend();
-										}}
-										type="button"
-									>
-										{#if speechAutoSend === true}
-											<span class="ml-2 self-center">On</span>
-										{:else}
-											<span class="ml-2 self-center">Off</span>
-										{/if}
-									</button>
+								<div>
+									<div class=" py-0.5 flex w-full justify-between">
+										<div class=" self-center text-xs font-medium">
+											Response AutoCopy to Clipboard
+										</div>
+
+										<button
+											class="p-1 px-3 text-xs flex rounded transition"
+											on:click={() => {
+												toggleResponseAutoCopy();
+											}}
+											type="button"
+										>
+											{#if responseAutoCopy === true}
+												<span class="ml-2 self-center">On</span>
+											{:else}
+												<span class="ml-2 self-center">Off</span>
+											{/if}
+										</button>
+									</div>
 								</div>
 							</div>
 
@@ -1014,6 +1118,17 @@
 								<div class="flex w-full">
 									<div class="flex-1 text-xs text-gray-700 dark:text-gray-200">
 										{$config && $config.version ? $config.version : WEB_UI_VERSION}
+									</div>
+								</div>
+							</div>
+
+							<hr class=" dark:border-gray-700" />
+
+							<div>
+								<div class=" mb-2.5 text-sm font-medium">Ollama Version</div>
+								<div class="flex w-full">
+									<div class="flex-1 text-xs text-gray-700 dark:text-gray-200">
+										{$info?.ollama?.version ?? 'N/A'}
 									</div>
 								</div>
 							</div>

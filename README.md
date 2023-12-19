@@ -13,6 +13,8 @@
 
 ChatGPT-Style Web Interface for Ollama 🦙
 
+**Disclaimer:** *ollama-webui is a community-driven project and is not affiliated with the Ollama team in any way. This initiative is independent, and any inquiries or feedback should be directed to [our community on Discord](https://discord.gg/5rJgQTnV4s). We kindly request users to refrain from contacting or harassing the Ollama team regarding this project.*
+
 ![Ollama Web UI Demo](./demo.gif)
 
 Also check our sibling project, [OllamaHub](https://ollamahub.com/), where you can discover, download, and explore customized Modelfiles for Ollama! 🦙🔍
@@ -35,7 +37,9 @@ Also check our sibling project, [OllamaHub](https://ollamahub.com/), where you c
 
 - 🤖 **Multiple Model Support**: Seamlessly switch between different chat models for diverse interactions.
 
-- 🗃️ **Modelfile Builder**: Easily create Ollama modelfiles via the web UI. Create and add your own character to Ollama by customizing system prompts, conversation starters, and more.
+- 🔄 **Multi-Modal Support**: Seamlessly engage with models that support multimodal interactions, including images (e.g., LLava).
+
+- 🧩 **Modelfile Builder**: Easily create Ollama modelfiles via the web UI. Create and add characters/agents, customize chat elements, and import modelfiles effortlessly through [OllamaHub](https://ollamahub.com/) integration.
 
 - ⚙️ **Many Models Conversations**: Effortlessly engage with various models simultaneously, harnessing their unique strengths for optimal responses. Enhance your experience by leveraging a diverse set of models in parallel.
 
@@ -59,7 +63,7 @@ Also check our sibling project, [OllamaHub](https://ollamahub.com/), where you c
 
 - 🌟 **Continuous Updates**: We are committed to improving Ollama Web UI with regular updates and new features.
 
-## 🔗 Also Check Out OllamaHub! 
+## 🔗 Also Check Out OllamaHub!
 
 Don't forget to explore our sibling project, [OllamaHub](https://ollamahub.com/), where you can discover, download, and explore customized Modelfiles. OllamaHub offers a wide range of exciting possibilities for enhancing your chat interactions with Ollama! 🚀
 
@@ -120,6 +124,33 @@ docker run -d -p 3000:8080 -e OLLAMA_API_BASE_URL=https://example.com/api --name
 ## How to Install Without Docker
 
 While we strongly recommend using our convenient Docker container installation for optimal support, we understand that some situations may require a non-Docker setup, especially for development purposes. Please note that non-Docker installations are not officially supported, and you might need to troubleshoot on your own.
+
+**Warning: Backend Dependency for Proper Functionality**
+
+In order to ensure the seamless operation of our application, it is crucial to run both the backend and frontend components simultaneously. Serving only the frontend in isolation is not supported and may lead to unpredictable outcomes, rendering the application inoperable. Attempting to raise an issue when solely serving the frontend will not be addressed, as it falls outside the intended usage. To achieve optimal results, please strictly adhere to the specified steps outlined in this documentation. Utilize the frontend solely for building static files, and subsequently run the complete application with the provided backend commands. Failure to follow these instructions may result in unsupported configurations, and we may not be able to provide assistance in such cases. Your cooperation in following the prescribed procedures is essential for a smooth user experience and effective issue resolution.
+
+### TL;DR 🚀
+
+Run the following commands to install:
+
+```sh
+git clone https://github.com/ollama-webui/ollama-webui.git
+cd ollama-webui/
+
+# Copying required .env file
+cp -RPp example.env .env
+
+# Building Frontend
+npm i
+npm run build
+
+# Serving Frontend with the Backend
+cd ./backend
+pip install -r requirements.txt
+sh start.sh
+```
+
+You should have the Ollama Web UI up and running at http://localhost:8080/. Enjoy! 😄
 
 ### Project Components
 
@@ -211,8 +242,6 @@ See [TROUBLESHOOTING.md](/TROUBLESHOOTING.md) for information on how to troubles
 
 Here are some exciting tasks on our roadmap:
 
-
-- 🔄 **Multi-Modal Support**: Seamlessly engage with models that support multimodal interactions, including images (e.g., LLava).
 - 📚 **RAG Integration**: Experience first-class retrieval augmented generation support, enabling chat with your documents.
 - 🔐 **Access Control**: Securely manage requests to Ollama by utilizing the backend as a reverse proxy gateway, ensuring only authenticated users can send specific requests.
 - 🧪 **Research-Centric Features**: Empower researchers in the fields of LLM and HCI with a comprehensive web UI for conducting user studies. Stay tuned for ongoing feature enhancements (e.g., surveys, analytics, and participant tracking) to facilitate their research.

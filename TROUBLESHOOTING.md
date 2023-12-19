@@ -2,6 +2,8 @@
 
 ## Connection Errors
 
+Make sure you have the **latest version of Ollama** installed before proceeding with the installation. You can find the latest version of Ollama at [https://ollama.ai/](https://ollama.ai/).
+
 If you encounter difficulties connecting to the Ollama server, please follow these steps to diagnose and resolve the issue:
 
 **1. Verify Ollama Server Configuration**
@@ -18,9 +20,10 @@ This configuration allows Ollama to accept connections from any source.
 
 Ensure that the Ollama URL is correctly formatted in the application settings. Follow these steps:
 
+- If your Ollama runs in a different host than Web UI make sure Ollama host address is provided when running Web UI container via `OLLAMA_API_BASE_URL` environment variable. [(e.g. OLLAMA_API_BASE_URL=http://192.168.1.1:11434/api)](https://github.com/ollama-webui/ollama-webui#accessing-external-ollama-on-a-different-server)
 - Go to "Settings" within the Ollama WebUI.
 - Navigate to the "General" section.
-- Verify that the Ollama URL is in the following format: `http://localhost:11434/api`.
+- Verify that the Ollama Server URL is set to: `/ollama/api`.
 
 It is crucial to include the `/api` at the end of the URL to ensure that the Ollama Web UI can communicate with the server.
 
@@ -42,6 +45,16 @@ Becomes
 docker run --platform linux/amd64 -d -p 3000:8080 -e OLLAMA_API_BASE_URL=http://example.com:11434/api --name ollama-webui --restart always ghcr.io/ollama-webui/ollama-webui:main
 ```
 
+## Running ollama-webui as a container on WSL Ubuntu
+If you're running ollama-webui via docker on WSL Ubuntu and have chosen to install webui and ollama separately, you might encounter connection issues. This is often due to the docker container being unable to reach the Ollama server at 127.0.0.1:11434. To resolve this, you can use the `--network=host` flag in the docker command. 
+
+Here's an example of the command you should run:
+
+```bash
+docker run -d --network=host -e OLLAMA_API_BASE_URL=http://127.0.0.1:11434/api --name ollama-webui --restart always ghcr.io/ollama-webui/ollama-webui:main
+```
+
 ## References
+
 [Change Docker Desktop Settings on Mac](https://docs.docker.com/desktop/settings/mac/) Search for "x86" in that page.
 [Run x86 (Intel) and ARM based images on Apple Silicon (M1) Macs?](https://forums.docker.com/t/run-x86-intel-and-arm-based-images-on-apple-silicon-m1-macs/117123)
