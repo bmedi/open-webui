@@ -1,60 +1,32 @@
-# Ollama Web UI Troubleshooting Guide
+# Open WebUI Troubleshooting Guide
 
-## Connection Errors
+## Understanding the Open WebUI Architecture
 
-Make sure you have the **latest version of Ollama** installed before proceeding with the installation. You can find the latest version of Ollama at [https://ollama.ai/](https://ollama.ai/).
+The Open WebUI system is designed to streamline interactions between the client (your browser) and the Ollama API. At the heart of this design is a backend reverse proxy, enhancing security and resolving CORS issues.
 
-If you encounter difficulties connecting to the Ollama server, please follow these steps to diagnose and resolve the issue:
+- **How it Works**: The Open WebUI is designed to interact with the Ollama API through a specific route. When a request is made from the WebUI to Ollama, it is not directly sent to the Ollama API. Initially, the request is sent to the Open WebUI backend via `/ollama` route. From there, the backend is responsible for forwarding the request to the Ollama API. This forwarding is accomplished by using the route specified in the `OLLAMA_BASE_URL` environment variable. Therefore, a request made to `/ollama` in the WebUI is effectively the same as making a request to `OLLAMA_BASE_URL` in the backend. For instance, a request to `/ollama/api/tags` in the WebUI is equivalent to `OLLAMA_BASE_URL/api/tags` in the backend.
 
-**1. Verify Ollama Server Configuration**
+- **Security Benefits**: This design prevents direct exposure of the Ollama API to the frontend, safeguarding against potential CORS (Cross-Origin Resource Sharing) issues and unauthorized access. Requiring authentication to access the Ollama API further enhances this security layer.
 
-Ensure that the Ollama server is properly configured to accept incoming connections from all origins. To do this, make sure the server is launched with the `OLLAMA_ORIGINS=*` environment variable, as shown in the following command:
+## Open WebUI: Server Connection Error
 
-```bash
-OLLAMA_HOST=0.0.0.0 OLLAMA_ORIGINS=* ollama serve
-```
+If you're experiencing connection issues, it’s often due to the WebUI docker container not being able to reach the Ollama server at 127.0.0.1:11434 (host.docker.internal:11434) inside the container . Use the `--network=host` flag in your docker command to resolve this. Note that the port changes from 3000 to 8080, resulting in the link: `http://localhost:8080`.
 
-This configuration allows Ollama to accept connections from any source.
-
-**2. Check Ollama URL Format**
-
-Ensure that the Ollama URL is correctly formatted in the application settings. Follow these steps:
-
-- If your Ollama runs in a different host than Web UI make sure Ollama host address is provided when running Web UI container via `OLLAMA_API_BASE_URL` environment variable. [(e.g. OLLAMA_API_BASE_URL=http://192.168.1.1:11434/api)](https://github.com/ollama-webui/ollama-webui#accessing-external-ollama-on-a-different-server)
-- Go to "Settings" within the Ollama WebUI.
-- Navigate to the "General" section.
-- Verify that the Ollama Server URL is set to: `/ollama/api`.
-
-It is crucial to include the `/api` at the end of the URL to ensure that the Ollama Web UI can communicate with the server.
-
-By following these troubleshooting steps, you should be able to identify and resolve connection issues with your Ollama server configuration. If you require further assistance or have additional questions, please don't hesitate to reach out or refer to our documentation for comprehensive guidance.
-
-## Running ollama-webui as a container on Apple Silicon Mac
-
-If you are running Docker on a M{1..3} based Mac and have taken the steps to run an x86 container, add "--platform linux/amd64" to the docker run command to prevent a warning.
-
-Example:
+**Example Docker Command**:
 
 ```bash
-docker run -d -p 3000:8080 -e OLLAMA_API_BASE_URL=http://example.com:11434/api --name ollama-webui --restart always ghcr.io/ollama-webui/ollama-webui:main
+docker run -d --network=host -v open-webui:/app/backend/data -e OLLAMA_BASE_URL=http://127.0.0.1:11434 --name open-webui --restart always ghcr.io/open-webui/open-webui:main
 ```
 
-Becomes
+### General Connection Errors
 
-```
-docker run --platform linux/amd64 -d -p 3000:8080 -e OLLAMA_API_BASE_URL=http://example.com:11434/api --name ollama-webui --restart always ghcr.io/ollama-webui/ollama-webui:main
-```
+**Ensure Ollama Version is Up-to-Date**: Always start by checking that you have the latest version of Ollama. Visit [Ollama's official site](https://ollama.com/) for the latest updates.
 
-## Running ollama-webui as a container on WSL Ubuntu
-If you're running ollama-webui via docker on WSL Ubuntu and have chosen to install webui and ollama separately, you might encounter connection issues. This is often due to the docker container being unable to reach the Ollama server at 127.0.0.1:11434. To resolve this, you can use the `--network=host` flag in the docker command. 
+**Troubleshooting Steps**:
 
-Here's an example of the command you should run:
+1. **Verify Ollama URL Format**:
+   - When running the Web UI container, ensure the `OLLAMA_BASE_URL` is correctly set. (e.g., `http://192.168.1.1:11434` for different host setups).
+   - In the Open WebUI, navigate to "Settings" > "General".
+   - Confirm that the Ollama Server URL is correctly set to `[OLLAMA URL]` (e.g., `http://localhost:11434`).
 
-```bash
-docker run -d --network=host -e OLLAMA_API_BASE_URL=http://127.0.0.1:11434/api --name ollama-webui --restart always ghcr.io/ollama-webui/ollama-webui:main
-```
-
-## References
-
-[Change Docker Desktop Settings on Mac](https://docs.docker.com/desktop/settings/mac/) Search for "x86" in that page.
-[Run x86 (Intel) and ARM based images on Apple Silicon (M1) Macs?](https://forums.docker.com/t/run-x86-intel-and-arm-based-images-on-apple-silicon-m1-macs/117123)
+By following these enhanced troubleshooting steps, connection issues should be effectively resolved. For further assistance or queries, feel free to reach out to us on our community Discord.

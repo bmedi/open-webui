@@ -1,14 +1,20 @@
 <script>
 	import { v4 as uuidv4 } from 'uuid';
-	import { toast } from 'svelte-french-toast';
+	import { toast } from 'svelte-sonner';
 	import { goto } from '$app/navigation';
-	import { OLLAMA_API_BASE_URL } from '$lib/constants';
-	import { settings, db, user, config, modelfiles } from '$lib/stores';
 
-	import Advanced from '$lib/components/chat/Settings/Advanced.svelte';
-	import { splitStream } from '$lib/utils';
-	import { onMount } from 'svelte';
+	import { onMount, getContext } from 'svelte';
 	import { page } from '$app/stores';
+
+	import { settings, user, config, modelfiles } from '$lib/stores';
+	import { splitStream } from '$lib/utils';
+
+	import { createModel } from '$lib/apis/ollama';
+	import { getModelfiles, updateModelfileByTagName } from '$lib/apis/modelfiles';
+
+	import AdvancedParams from '$lib/components/chat/Settings/Advanced/AdvancedParams.svelte';
+
+	const i18n = getContext('i18n');
 
 	let loading = false;
 
@@ -78,17 +84,9 @@
 		}
 	});
 
-	const saveModelfile = async (modelfile) => {
-		await modelfiles.set(
-			$modelfiles.map((e) => {
-				if (e.tagName === modelfile.tagName) {
-					return modelfile;
-				} else {
-					return e;
-				}
-			})
-		);
-		localStorage.setItem('modelfiles', JSON.stringify($modelfiles));
+	const updateModelfile = async (modelfile) => {
+		await updateModelfileByTagName(localStorage.token, modelfile.tagName, modelfile);
+		await modelfiles.set(await getModelfiles(localStorage.token));
 	};
 
 	const updateHandler = async () => {
@@ -106,18 +104,7 @@
 			content !== '' &&
 			Object.keys(categories).filter((category) => categories[category]).length > 0
 		) {
-			const res = await fetch(`${$settings?.API_BASE_URL ?? OLLAMA_API_BASE_URL}/create`, {
-				method: 'POST',
-				headers: {
-					'Content-Type': 'text/event-stream',
-					...($settings.authHeader && { Authorization: $settings.authHeader }),
-					...($user && { Authorization: `Bearer ${localStorage.token}` })
-				},
-				body: JSON.stringify({
-					name: tagName,
-					modelfile: content
-				})
-			});
+			const res = await createModel(localStorage.token, tagName, content);
 
 			if (res) {
 				const reader = res.body
@@ -178,7 +165,7 @@
 			}
 
 			if (success) {
-				await saveModelfile({
+				await updateModelfile({
 					tagName: tagName,
 					imageUrl: imageUrl,
 					title: title,
@@ -195,8 +182,8 @@
 	};
 </script>
 
-<div class="min-h-screen w-full flex justify-center dark:text-white">
-	<div class=" py-2.5 flex flex-col justify-between w-full">
+<div class="min-h-screen max-h-[100dvh] w-full flex justify-center dark:text-white">
+	<div class="flex flex-col justify-between w-full overflow-y-auto">
 		<div class="max-w-2xl mx-auto w-full px-3 md:px-0 my-10">
 			<input
 				bind:this={filesInputElement}
@@ -263,7 +250,7 @@
 				}}
 			/>
 
-			<div class=" text-2xl font-semibold mb-6">My Modelfiles</div>
+			<div class=" text-2xl font-semibold mb-6">{$i18n.t('My Modelfiles')}</div>
 
 			<button
 				class="flex space-x-1"
@@ -285,7 +272,7 @@
 						/>
 					</svg>
 				</div>
-				<div class=" self-center font-medium text-sm">Back</div>
+				<div class=" self-center font-medium text-sm">{$i18n.t('Back')}</div>
 			</button>
 			<hr class="my-3 dark:border-gray-700" />
 
@@ -332,12 +319,12 @@
 
 				<div class="my-2 flex space-x-2">
 					<div class="flex-1">
-						<div class=" text-sm font-semibold mb-2">Name*</div>
+						<div class=" text-sm font-semibold mb-2">{$i18n.t('Name')}*</div>
 
 						<div>
 							<input
 								class="px-3 py-1.5 text-sm w-full bg-transparent border dark:border-gray-600 outline-none rounded-lg"
-								placeholder="Name your modelfile"
+								placeholder={$i18n.t('Name your modelfile')}
 								bind:value={title}
 								required
 							/>
@@ -345,12 +332,12 @@
 					</div>
 
 					<div class="flex-1">
-						<div class=" text-sm font-semibold mb-2">Model Tag Name*</div>
+						<div class=" text-sm font-semibold mb-2">{$i18n.t('Model Tag Name')}*</div>
 
 						<div>
 							<input
 								class="px-3 py-1.5 text-sm w-full bg-transparent disabled:text-gray-500 border dark:border-gray-600 outline-none rounded-lg"
-								placeholder="Add a model tag name"
+								placeholder={$i18n.t('Add a model tag name')}
 								value={tagName}
 								disabled
 								required
@@ -360,12 +347,12 @@
 				</div>
 
 				<div class="my-2">
-					<div class=" text-sm font-semibold mb-2">Description*</div>
+					<div class=" text-sm font-semibold mb-2">{$i18n.t('Description')}*</div>
 
 					<div>
 						<input
 							class="px-3 py-1.5 text-sm w-full bg-transparent border dark:border-gray-600 outline-none rounded-lg"
-							placeholder="Add a short description about what this modelfile does"
+							placeholder={$i18n.t('Add a short description about what this modelfile does')}
 							bind:value={desc}
 							required
 						/>
@@ -374,13 +361,13 @@
 
 				<div class="my-2">
 					<div class="flex w-full justify-between">
-						<div class=" self-center text-sm font-semibold">Modelfile</div>
+						<div class=" self-center text-sm font-semibold">{$i18n.t('Modelfile')}</div>
 					</div>
 
 					<!-- <div class=" text-sm font-semibold mb-2"></div> -->
 
 					<div class="mt-2">
-						<div class=" text-xs font-semibold mb-2">Content*</div>
+						<div class=" text-xs font-semibold mb-2">{$i18n.t('Content')}*</div>
 
 						<div>
 							<textarea
@@ -396,7 +383,7 @@
 
 				<div class="my-2">
 					<div class="flex w-full justify-between mb-2">
-						<div class=" self-center text-sm font-semibold">Prompt suggestions</div>
+						<div class=" self-center text-sm font-semibold">{$i18n.t('Prompt suggestions')}</div>
 
 						<button
 							class="p-1 px-3 text-xs flex rounded transition"
@@ -424,7 +411,7 @@
 							<div class=" flex border dark:border-gray-600 rounded-lg">
 								<input
 									class="px-3 py-1.5 text-sm w-full bg-transparent outline-none border-r dark:border-gray-600"
-									placeholder="Write a prompt suggestion (e.g. Who are you?)"
+									placeholder={$i18n.t('Write a prompt suggestion (e.g. Who are you?)')}
 									bind:value={prompt.content}
 								/>
 
@@ -453,7 +440,7 @@
 				</div>
 
 				<div class="my-2">
-					<div class=" text-sm font-semibold mb-2">Categories</div>
+					<div class=" text-sm font-semibold mb-2">{$i18n.t('Categories')}</div>
 
 					<div class="grid grid-cols-4">
 						{#each Object.keys(categories) as category}
@@ -468,7 +455,7 @@
 
 				{#if pullProgress !== null}
 					<div class="my-2">
-						<div class=" text-sm font-semibold mb-2">Pull Progress</div>
+						<div class=" text-sm font-semibold mb-2">{$i18n.t('Pull Progress')}</div>
 						<div class="w-full rounded-full dark:bg-gray-800">
 							<div
 								class="dark:bg-gray-600 text-xs font-medium text-blue-100 text-center p-0.5 leading-none rounded-full"
@@ -491,7 +478,7 @@
 						type="submit"
 						disabled={loading}
 					>
-						<div class=" self-center font-medium">Save & Update</div>
+						<div class=" self-center font-medium">{$i18n.t('Save & Update')}</div>
 
 						{#if loading}
 							<div class="ml-1.5 self-center">

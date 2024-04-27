@@ -4,7 +4,6 @@ about: Create a report to help us improve
 title: ''
 labels: ''
 assignees: ''
-
 ---
 
 # Bug Report
@@ -25,14 +24,18 @@ assignees: ''
 
 ## Environment
 
+- **Open WebUI Version:** [e.g., 0.1.120]
+- **Ollama (if applicable):** [e.g., 0.1.30, 0.1.32-rc1]
+
 - **Operating System:** [e.g., Windows 10, macOS Big Sur, Ubuntu 20.04]
 - **Browser (if applicable):** [e.g., Chrome 100.0, Firefox 98.0]
 
 ## Reproduction Details
 
 **Confirmation:**
+
 - [ ] I have read and followed all the instructions provided in the README.md.
-- [ ] I have reviewed the troubleshooting.md document.
+- [ ] I am on the latest version of both Open WebUI and Ollama.
 - [ ] I have included the browser console logs.
 - [ ] I have included the Docker container logs.
 

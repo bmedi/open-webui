@@ -1,272 +1,304 @@
 <script lang="ts">
-	import { v4 as uuidv4 } from 'uuid';
+	import { toast } from 'svelte-sonner';
+	import { onMount, tick, getContext } from 'svelte';
 	import { openDB, deleteDB } from 'idb';
-	import { onMount, tick } from 'svelte';
+	import fileSaver from 'file-saver';
+	const { saveAs } = fileSaver;
+
 	import { goto } from '$app/navigation';
 
+	import { getOllamaModels, getOllamaVersion } from '$lib/apis/ollama';
+	import { getModelfiles } from '$lib/apis/modelfiles';
+	import { getPrompts } from '$lib/apis/prompts';
+	import { getOpenAIModels } from '$lib/apis/openai';
+	import { getLiteLLMModels } from '$lib/apis/litellm';
+	import { getDocs } from '$lib/apis/documents';
+	import { getAllChatTags } from '$lib/apis/chats';
+
 	import {
-		config,
-		info,
 		user,
 		showSettings,
 		settings,
 		models,
-		db,
-		chats,
-		chatId,
-		modelfiles
+		modelfiles,
+		prompts,
+		documents,
+		tags,
+		showChangelog,
+		config
 	} from '$lib/stores';
+	import { REQUIRED_OLLAMA_VERSION, WEBUI_API_BASE_URL } from '$lib/constants';
+	import { compareVersion } from '$lib/utils';
 
 	import SettingsModal from '$lib/components/chat/SettingsModal.svelte';
 	import Sidebar from '$lib/components/layout/Sidebar.svelte';
-	import toast from 'svelte-french-toast';
-	import { OLLAMA_API_BASE_URL, WEBUI_API_BASE_URL } from '$lib/constants';
+	import ShortcutsModal from '$lib/components/chat/ShortcutsModal.svelte';
+	import ChangelogModal from '$lib/components/ChangelogModal.svelte';
+	import Tooltip from '$lib/components/common/Tooltip.svelte';
 
-	let requiredOllamaVersion = '0.1.16';
+	const i18n = getContext('i18n');
+
+	let ollamaVersion = '';
 	let loaded = false;
+	let showShortcutsButtonElement: HTMLButtonElement;
+	let DB = null;
+	let localDBChats = [];
+
+	let showShortcuts = false;
 
 	const getModels = async () => {
-		let models = [];
-		const res = await fetch(`${$settings?.API_BASE_URL ?? OLLAMA_API_BASE_URL}/tags`, {
-			method: 'GET',
-			headers: {
-				Accept: 'application/json',
-				'Content-Type': 'application/json',
-				...($settings.authHeader && { Authorization: $settings.authHeader }),
-				...($user && { Authorization: `Bearer ${localStorage.token}` })
-			}
-		})
-			.then(async (res) => {
-				if (!res.ok) throw await res.json();
-				return res.json();
-			})
-			.catch((error) => {
+		let models = await Promise.all([
+			await getOllamaModels(localStorage.token).catch((error) => {
 				console.log(error);
-				if ('detail' in error) {
-					toast.error(error.detail);
-				} else {
-					toast.error('Server connection failed');
-				}
 				return null;
-			});
-		console.log(res);
-		models.push(...(res?.models ?? []));
-
-		// If OpenAI API Key exists
-		if ($settings.OPENAI_API_KEY) {
-			// Validate OPENAI_API_KEY
-			const openaiModelRes = await fetch(`https://api.openai.com/v1/models`, {
-				method: 'GET',
-				headers: {
-					'Content-Type': 'application/json',
-					Authorization: `Bearer ${$settings.OPENAI_API_KEY}`
-				}
+			}),
+			await getOpenAIModels(localStorage.token).catch((error) => {
+				console.log(error);
+				return null;
+			}),
+			await getLiteLLMModels(localStorage.token).catch((error) => {
+				console.log(error);
+				return null;
 			})
-				.then(async (res) => {
-					if (!res.ok) throw await res.json();
-					return res.json();
-				})
-				.catch((error) => {
-					console.log(error);
-					toast.error(`OpenAI: ${error?.error?.message ?? 'Network Problem'}`);
-					return null;
-				});
+		]);
 
-			const openAIModels = openaiModelRes?.data ?? null;
-
-			models.push(
-				...(openAIModels
-					? [
-							{ name: 'hr' },
-							...openAIModels
-								.map((model) => ({ name: model.id, label: 'OpenAI' }))
-								.filter((model) => model.name.includes('gpt'))
-					  ]
-					: [])
-			);
-		}
+		models = models
+			.filter((models) => models)
+			.reduce((a, e, i, arr) => a.concat(e, ...(i < arr.length - 1 ? [{ name: 'hr' }] : [])), []);
 
 		return models;
 	};
 
-	const getDB = async () => {
-		const DB = await openDB('Chats', 1, {
-			upgrade(db) {
-				const store = db.createObjectStore('chats', {
-					keyPath: 'id',
-					autoIncrement: true
-				});
-				store.createIndex('timestamp', 'timestamp');
-			}
-		});
-
-		return {
-			db: DB,
-			getChatById: async function (id) {
-				return await this.db.get('chats', id);
-			},
-			getChats: async function () {
-				let chats = await this.db.getAllFromIndex('chats', 'timestamp');
-				chats = chats.map((item, idx) => ({
-					title: chats[chats.length - 1 - idx].title,
-					id: chats[chats.length - 1 - idx].id
-				}));
-				return chats;
-			},
-			exportChats: async function () {
-				let chats = await this.db.getAllFromIndex('chats', 'timestamp');
-				chats = chats.map((item, idx) => chats[chats.length - 1 - idx]);
-				return chats;
-			},
-			addChats: async function (_chats) {
-				for (const chat of _chats) {
-					console.log(chat);
-					await this.addChat(chat);
-				}
-				await chats.set(await this.getChats());
-			},
-			addChat: async function (chat) {
-				await this.db.put('chats', {
-					...chat
-				});
-			},
-			createNewChat: async function (chat) {
-				await this.addChat({ ...chat, timestamp: Date.now() });
-				await chats.set(await this.getChats());
-			},
-			updateChatById: async function (id, updated) {
-				const chat = await this.getChatById(id);
-
-				await this.db.put('chats', {
-					...chat,
-					...updated,
-					timestamp: Date.now()
-				});
-
-				await chats.set(await this.getChats());
-			},
-			deleteChatById: async function (id) {
-				if ($chatId === id) {
-					goto('/');
-					await chatId.set(uuidv4());
-				}
-				await this.db.delete('chats', id);
-				await chats.set(await this.getChats());
-			},
-			deleteAllChat: async function () {
-				const tx = this.db.transaction('chats', 'readwrite');
-				await Promise.all([tx.store.clear(), tx.done]);
-
-				await chats.set(await this.getChats());
-			}
-		};
-	};
-
-	const getOllamaVersion = async () => {
-		const res = await fetch(`${$settings?.API_BASE_URL ?? OLLAMA_API_BASE_URL}/version`, {
-			method: 'GET',
-			headers: {
-				Accept: 'application/json',
-				'Content-Type': 'application/json',
-				...($settings.authHeader && { Authorization: $settings.authHeader }),
-				...($user && { Authorization: `Bearer ${localStorage.token}` })
-			}
-		})
-			.then(async (res) => {
-				if (!res.ok) throw await res.json();
-				return res.json();
-			})
-			.catch((error) => {
-				console.log(error);
-				if ('detail' in error) {
-					toast.error(error.detail);
-				} else {
-					toast.error('Server connection failed');
-				}
-				return null;
+	const setOllamaVersion = async (version: string = '') => {
+		if (version === '') {
+			version = await getOllamaVersion(localStorage.token).catch((error) => {
+				return '';
 			});
+		}
 
-		console.log(res);
+		ollamaVersion = version;
 
-		return res?.version ?? '0';
-	};
-
-	const setOllamaVersion = async (ollamaVersion) => {
-		await info.set({ ...$info, ollama: { version: ollamaVersion } });
-
-		if (
-			ollamaVersion.localeCompare(requiredOllamaVersion, undefined, {
-				numeric: true,
-				sensitivity: 'case',
-				caseFirst: 'upper'
-			}) < 0
-		) {
-			toast.error(`Ollama Version: ${ollamaVersion}`);
+		console.log(ollamaVersion);
+		if (compareVersion(REQUIRED_OLLAMA_VERSION, ollamaVersion)) {
+			toast.error(`Ollama Version: ${ollamaVersion !== '' ? ollamaVersion : 'Not Detected'}`);
 		}
 	};
 
 	onMount(async () => {
-		if ($config && $config.auth && $user === undefined) {
+		if ($user === undefined) {
 			await goto('/auth');
+		} else if (['user', 'admin'].includes($user.role)) {
+			try {
+				// Check if IndexedDB exists
+				DB = await openDB('Chats', 1);
+
+				if (DB) {
+					const chats = await DB.getAllFromIndex('chats', 'timestamp');
+					localDBChats = chats.map((item, idx) => chats[chats.length - 1 - idx]);
+
+					if (localDBChats.length === 0) {
+						await deleteDB('Chats');
+					}
+				}
+
+				console.log(DB);
+			} catch (error) {
+				// IndexedDB Not Found
+			}
+
+			await models.set(await getModels());
+			await settings.set(JSON.parse(localStorage.getItem('settings') ?? '{}'));
+
+			await modelfiles.set(await getModelfiles(localStorage.token));
+			await prompts.set(await getPrompts(localStorage.token));
+			await documents.set(await getDocs(localStorage.token));
+			await tags.set(await getAllChatTags(localStorage.token));
+
+			modelfiles.subscribe(async () => {
+				// should fetch models
+				await models.set(await getModels());
+			});
+
+			document.addEventListener('keydown', function (event) {
+				const isCtrlPressed = event.ctrlKey || event.metaKey; // metaKey is for Cmd key on Mac
+				// Check if the Shift key is pressed
+				const isShiftPressed = event.shiftKey;
+
+				// Check if Ctrl + Shift + O is pressed
+				if (isCtrlPressed && isShiftPressed && event.key.toLowerCase() === 'o') {
+					event.preventDefault();
+					console.log('newChat');
+					document.getElementById('sidebar-new-chat-button')?.click();
+				}
+
+				// Check if Shift + Esc is pressed
+				if (isShiftPressed && event.key === 'Escape') {
+					event.preventDefault();
+					console.log('focusInput');
+					document.getElementById('chat-textarea')?.focus();
+				}
+
+				// Check if Ctrl + Shift + ; is pressed
+				if (isCtrlPressed && isShiftPressed && event.key === ';') {
+					event.preventDefault();
+					console.log('copyLastCodeBlock');
+					const button = [...document.getElementsByClassName('copy-code-button')]?.at(-1);
+					button?.click();
+				}
+
+				// Check if Ctrl + Shift + C is pressed
+				if (isCtrlPressed && isShiftPressed && event.key.toLowerCase() === 'c') {
+					event.preventDefault();
+					console.log('copyLastResponse');
+					const button = [...document.getElementsByClassName('copy-response-button')]?.at(-1);
+					console.log(button);
+					button?.click();
+				}
+
+				// Check if Ctrl + Shift + S is pressed
+				if (isCtrlPressed && isShiftPressed && event.key.toLowerCase() === 's') {
+					event.preventDefault();
+					console.log('toggleSidebar');
+					document.getElementById('sidebar-toggle-button')?.click();
+				}
+
+				// Check if Ctrl + Shift + Backspace is pressed
+				if (isCtrlPressed && isShiftPressed && event.key === 'Backspace') {
+					event.preventDefault();
+					console.log('deleteChat');
+					document.getElementById('delete-chat-button')?.click();
+				}
+
+				// Check if Ctrl + . is pressed
+				if (isCtrlPressed && event.key === '.') {
+					event.preventDefault();
+					console.log('openSettings');
+					document.getElementById('open-settings-button')?.click();
+				}
+
+				// Check if Ctrl + / is pressed
+				if (isCtrlPressed && event.key === '/') {
+					event.preventDefault();
+					console.log('showShortcuts');
+					showShortcutsButtonElement.click();
+				}
+			});
+
+			if ($user.role === 'admin') {
+				showChangelog.set(localStorage.version !== $config.version);
+			}
+
+			await tick();
 		}
 
-		await settings.set(JSON.parse(localStorage.getItem('settings') ?? '{}'));
-
-		await models.set(await getModels());
-		await modelfiles.set(JSON.parse(localStorage.getItem('modelfiles') ?? '[]'));
-
-		modelfiles.subscribe(async () => {
-			await models.set(await getModels());
-		});
-
-		let _db = await getDB();
-		await db.set(_db);
-
-		await setOllamaVersion(await getOllamaVersion());
-
-		await tick();
 		loaded = true;
 	});
 </script>
 
 {#if loaded}
+	<div class=" hidden lg:flex fixed bottom-0 right-0 px-3 py-3 z-10">
+		<Tooltip content="Help" placement="left">
+			<button
+				id="show-shortcuts-button"
+				bind:this={showShortcutsButtonElement}
+				class="text-gray-600 dark:text-gray-300 bg-gray-300/20 w-6 h-6 flex items-center justify-center text-xs rounded-full"
+				on:click={() => {
+					showShortcuts = !showShortcuts;
+				}}
+			>
+				?
+			</button>
+		</Tooltip>
+	</div>
+
+	<ShortcutsModal bind:show={showShortcuts} />
+
 	<div class="app relative">
-		{#if ($info?.ollama?.version ?? '0').localeCompare( requiredOllamaVersion, undefined, { numeric: true, sensitivity: 'case', caseFirst: 'upper' } ) < 0}
-			<div class="absolute w-full h-full flex z-50">
+		{#if !['user', 'admin'].includes($user.role)}
+			<div class="fixed w-full h-full flex z-50">
 				<div
-					class="absolute rounded-xl w-full h-full backdrop-blur bg-gray-900/60 flex justify-center"
+					class="absolute w-full h-full backdrop-blur-md bg-white/20 dark:bg-gray-900/50 flex justify-center"
 				>
 					<div class="m-auto pb-44 flex flex-col justify-center">
 						<div class="max-w-md">
 							<div class="text-center dark:text-white text-2xl font-medium z-50">
-								Connection Issue or Update Needed
+								Account Activation Pending<br /> Contact Admin for WebUI Access
 							</div>
 
 							<div class=" mt-4 text-center text-sm dark:text-gray-200 w-full">
-								Oops! It seems like your Ollama needs a little attention. <br
-									class=" hidden sm:flex"
-								/>We've detected either a connection hiccup or observed that you're using an older
-								version. Ensure you're on the latest Ollama version
-								<br class=" hidden sm:flex" />(version
-								<span class=" dark:text-white font-medium">{requiredOllamaVersion} or higher</span>)
-								or check your connection.
+								Your account status is currently pending activation. To access the WebUI, please
+								reach out to the administrator. Admins can manage user statuses from the Admin
+								Panel.
 							</div>
 
 							<div class=" mt-6 mx-auto relative group w-fit">
 								<button
-									class="relative z-20 flex px-5 py-2 rounded-full bg-gray-100 hover:bg-gray-200 transition font-medium text-sm"
+									class="relative z-20 flex px-5 py-2 rounded-full bg-white border border-gray-100 dark:border-none hover:bg-gray-100 transition font-medium text-sm"
 									on:click={async () => {
-										await setOllamaVersion(await getOllamaVersion());
+										location.href = '/';
 									}}
 								>
-									Check Again
+									{$i18n.t('Check Again')}
 								</button>
 
 								<button
 									class="text-xs text-center w-full mt-2 text-gray-400 underline"
 									on:click={async () => {
-										await setOllamaVersion(requiredOllamaVersion);
-									}}>Close</button
+										localStorage.removeItem('token');
+										location.href = '/auth';
+									}}>{$i18n.t('Sign Out')}</button
+								>
+							</div>
+						</div>
+					</div>
+				</div>
+			</div>
+		{:else if localDBChats.length > 0}
+			<div class="fixed w-full h-full flex z-50">
+				<div
+					class="absolute w-full h-full backdrop-blur-md bg-white/20 dark:bg-gray-900/50 flex justify-center"
+				>
+					<div class="m-auto pb-44 flex flex-col justify-center">
+						<div class="max-w-md">
+							<div class="text-center dark:text-white text-2xl font-medium z-50">
+								Important Update<br /> Action Required for Chat Log Storage
+							</div>
+
+							<div class=" mt-4 text-center text-sm dark:text-gray-200 w-full">
+								{$i18n.t(
+									"Saving chat logs directly to your browser's storage is no longer supported. Please take a moment to download and delete your chat logs by clicking the button below. Don't worry, you can easily re-import your chat logs to the backend through"
+								)}
+								<span class="font-semibold dark:text-white"
+									>{$i18n.t('Settings')} > {$i18n.t('Chats')} > {$i18n.t('Import Chats')}</span
+								>. {$i18n.t(
+									'This ensures that your valuable conversations are securely saved to your backend database. Thank you!'
+								)}
+							</div>
+
+							<div class=" mt-6 mx-auto relative group w-fit">
+								<button
+									class="relative z-20 flex px-5 py-2 rounded-full bg-white border border-gray-100 dark:border-none hover:bg-gray-100 transition font-medium text-sm"
+									on:click={async () => {
+										let blob = new Blob([JSON.stringify(localDBChats)], {
+											type: 'application/json'
+										});
+										saveAs(blob, `chat-export-${Date.now()}.json`);
+
+										const tx = DB.transaction('chats', 'readwrite');
+										await Promise.all([tx.store.clear(), tx.done]);
+										await deleteDB('Chats');
+
+										localDBChats = [];
+									}}
+								>
+									Download & Delete
+								</button>
+
+								<button
+									class="text-xs text-center w-full mt-2 text-gray-400 underline"
+									on:click={async () => {
+										localDBChats = [];
+									}}>{$i18n.t('Close')}</button
 								>
 							</div>
 						</div>
@@ -276,12 +308,11 @@
 		{/if}
 
 		<div
-			class=" text-gray-700 dark:text-gray-100 bg-white dark:bg-gray-800 min-h-screen overflow-auto flex flex-row"
+			class=" text-gray-700 dark:text-gray-100 bg-white dark:bg-gray-900 min-h-screen overflow-auto flex flex-row"
 		>
 			<Sidebar />
-
 			<SettingsModal bind:show={$showSettings} />
-
+			<ChangelogModal bind:show={$showChangelog} />
 			<slot />
 		</div>
 	</div>
